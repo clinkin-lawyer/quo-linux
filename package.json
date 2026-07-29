@@ -1,0 +1,36 @@
+{
+  "name": "quo-linux",
+  "version": "1.0.0",
+  "description": "Unofficial Electron wrapper for Quo (my.quo.com) on Linux",
+  "main": "main.js",
+  "homepage": "https://www.quo.com",
+  "scripts": {
+    "postinstall": "bash scripts/fetch-icon.sh",
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "author": "Matt Waldrop",
+  "license": "MIT",
+  "private": true,
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.0"
+  },
+  "build": {
+    "appId": "com.waldroplawfirm.quo-linux",
+    "productName": "Quo",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "build/icon.png",
+      "category": "Network",
+      "maintainer": "mattw@waldroplawfirm.com"
+    }
+  }
+}
