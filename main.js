@@ -7,10 +7,19 @@ const ALLOWED_HOSTS = ['quo.com', 'openphone.com', 'openphoneapi.com'];
 const isAllowedHost = (url) => ALLOWED_HOSTS.some((host) => url.includes(host));
 const ICON_PATH = path.join(__dirname, 'build', 'icon.png');
 const STATE_PATH = path.join(app.getPath('userData'), 'window-state.json');
+const LOG_PATH = path.join(app.getPath('userData'), 'recovery.log');
 
 let mainWindow;
 let tray;
 let isQuitting = false;
+
+// Always-on (not gated by QUO_DEBUG) so a white-screen recurrence leaves a trail
+// even if nobody was running with debug logging at the time.
+function logRecoveryEvent(message) {
+  const line = `${new Date().toISOString()} ${message}\n`;
+  if (process.env.QUO_DEBUG) console.log(line.trim());
+  fs.appendFile(LOG_PATH, line, () => {});
+}
 
 function loadWindowState() {
   try {
@@ -49,7 +58,7 @@ function createWindow() {
   });
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, url, isMainFrame) => {
     if (!isMainFrame || errorCode === -3) return; // -3 = ERR_ABORTED, e.g. a superseded navigation
-    if (process.env.QUO_DEBUG) console.log(`[did-fail-load] ${errorCode} ${errorDescription} ${url}`);
+    logRecoveryEvent(`did-fail-load ${errorCode} ${errorDescription} ${url}, retrying in ${retryDelay}ms`);
     setTimeout(() => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(QUO_URL);
     }, retryDelay);
@@ -58,8 +67,9 @@ function createWindow() {
 
   // Recover from a crashed/killed renderer instead of leaving a dead white window.
   mainWindow.webContents.on('render-process-gone', (event, details) => {
-    if (process.env.QUO_DEBUG) console.log(`[render-process-gone] ${details.reason}`);
-    if (details.reason !== 'clean-exit' && mainWindow && !mainWindow.isDestroyed()) {
+    if (details.reason === 'clean-exit') return;
+    logRecoveryEvent(`render-process-gone ${details.reason}, reloading`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.loadURL(QUO_URL);
     }
   });
@@ -96,6 +106,7 @@ function createWindow() {
   // hidden (tray) or the system suspends; a forced repaint is cheap and fixes it
   // without a full reload.
   mainWindow.on('show', () => {
+    logRecoveryEvent('window shown, forcing repaint');
     mainWindow.webContents.invalidate();
   });
 
@@ -164,7 +175,10 @@ if (!gotLock) {
 
     powerMonitor.on('resume', () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
-      if (mainWindow.isVisible()) mainWindow.webContents.invalidate();
+      if (mainWindow.isVisible()) {
+        logRecoveryEvent('system resumed, forcing repaint');
+        mainWindow.webContents.invalidate();
+      }
     });
   });
 
