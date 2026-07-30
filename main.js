@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, shell, session, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, session, nativeImage, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -41,13 +41,33 @@ function createWindow() {
 
   mainWindow.loadURL(QUO_URL);
 
+  // A failed load (e.g. autostart racing network-up, a flaky connection) otherwise
+  // leaves the window white forever with nothing to recover it. Retry with backoff.
+  let retryDelay = 2000;
+  mainWindow.webContents.on('did-finish-load', () => {
+    retryDelay = 2000;
+  });
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, url, isMainFrame) => {
+    if (!isMainFrame || errorCode === -3) return; // -3 = ERR_ABORTED, e.g. a superseded navigation
+    if (process.env.QUO_DEBUG) console.log(`[did-fail-load] ${errorCode} ${errorDescription} ${url}`);
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(QUO_URL);
+    }, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, 30000);
+  });
+
+  // Recover from a crashed/killed renderer instead of leaving a dead white window.
+  mainWindow.webContents.on('render-process-gone', (event, details) => {
+    if (process.env.QUO_DEBUG) console.log(`[render-process-gone] ${details.reason}`);
+    if (details.reason !== 'clean-exit' && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.loadURL(QUO_URL);
+    }
+  });
+
   if (process.env.QUO_DEBUG) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
     mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
       console.log(`[renderer] ${message} (${sourceId}:${line})`);
-    });
-    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, url) => {
-      console.log(`[did-fail-load] ${errorCode} ${errorDescription} ${url}`);
     });
   }
 
@@ -71,6 +91,13 @@ function createWindow() {
 
   mainWindow.on('resize', saveWindowState);
   mainWindow.on('move', saveWindowState);
+
+  // Chromium's compositor can leave a stale/blank frame after the window sits
+  // hidden (tray) or the system suspends; a forced repaint is cheap and fixes it
+  // without a full reload.
+  mainWindow.on('show', () => {
+    mainWindow.webContents.invalidate();
+  });
 
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
@@ -134,6 +161,11 @@ if (!gotLock) {
 
     createWindow();
     createTray();
+
+    powerMonitor.on('resume', () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isVisible()) mainWindow.webContents.invalidate();
+    });
   });
 
   app.on('before-quit', () => {
